@@ -1,0 +1,1626 @@
+import { useState, useEffect, useCallback } from "react";
+
+// ============================================================
+// CONFIG
+// ============================================================
+const SUPABASE_URL = "https://zntomaumuftwibjsjfsw.supabase.co";
+const SUPABASE_ANON_KEY = "PASTE_YOUR_NEW_ANON_KEY_HERE";
+const VERIFY_PAYMENT_URL = `${SUPABASE_URL}/functions/v1/verify-payment`;
+
+const sb = {
+  auth: {
+    signIn: async ({ email, password }) => {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST", headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email, password }),
+      }).catch(() => null);
+      if (!r) return { data: null, error: { message: "Network error" } };
+      const d = await r.json();
+      if (!d.access_token) return { data: null, error: { message: d.error_description || "Invalid credentials" } };
+      localStorage.setItem("sb_token", d.access_token);
+      localStorage.setItem("sb_user", JSON.stringify(d.user));
+      return { data: d, error: null };
+    },
+    signUp: async ({ email, password, options }) => {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+        method: "POST", headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email, password, data: options?.data }),
+      }).catch(() => null);
+      if (!r) return { data: null, error: { message: "Network error" } };
+      const d = await r.json();
+      if (d.error || d.msg) return { data: null, error: { message: d.error_description || d.msg || "Signup failed" } };
+      return { data: d, error: null };
+    },
+    signOut: () => { localStorage.removeItem("sb_token"); localStorage.removeItem("sb_user"); },
+    getUser: () => { const u = localStorage.getItem("sb_user"); return u ? JSON.parse(u) : null; },
+  },
+};
+
+const verifyPayment = async ({ checkoutId, userId, amount, month }) => {
+  try {
+    const res = await fetch(VERIFY_PAYMENT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("sb_token")}`, apikey: SUPABASE_ANON_KEY },
+      body: JSON.stringify({ checkoutId, userId, amount, month }),
+    });
+    return await res.json();
+  } catch { return { ok: false, error: "Network error" }; }
+};
+
+// ============================================================
+// YOCO PAYMENT LINKS
+// ============================================================
+const YOCO_LINKS = [
+  // ── 5% p/m ───────────────────────────────────────────────────────
+  { label: "R150 / month",     amount: 150,    url: "https://pay.yoco.com/r/2PX1xv", tier: "Starter",  growth: 5   },
+  { label: "R300 / month",     amount: 300,    url: "https://pay.yoco.com/r/73rQvR", tier: "Starter",  growth: 5   },
+  { label: "R450 / month",     amount: 450,    url: "https://pay.yoco.com/r/2QEpR9", tier: "Starter",  growth: 5   },
+
+  // ── 10% p/m ──────────────────────────────────────────────────────
+  { label: "R600 / month",     amount: 600,    url: "https://pay.yoco.com/r/70pZOW", tier: "Growth",   growth: 10  },
+  { label: "R750 / month",     amount: 750,    url: "https://pay.yoco.com/r/7vLYKl", tier: "Growth",   growth: 10  },
+  { label: "R900 / month",     amount: 900,    url: "https://pay.yoco.com/r/2Dwx1p", tier: "Growth",   growth: 10  },
+
+  // ── 15% p/m ──────────────────────────────────────────────────────
+  { label: "R1,200 / month",   amount: 1200,   url: "https://pay.yoco.com/r/2QEpRa", tier: "Premium",  growth: 15  },
+  { label: "R1,800 / month",   amount: 1800,   url: "https://pay.yoco.com/r/mde8Ng", tier: "Premium",  growth: 15  },
+  { label: "R2,400 / month",   amount: 2400,   url: "https://pay.yoco.com/r/2pJz55", tier: "Premium",  growth: 15  },
+
+  // ── 25% p/m ──────────────────────────────────────────────────────
+  { label: "R4,800 / month",   amount: 4800,   url: "https://pay.yoco.com/r/4WpB6A", tier: "Elite",    growth: 25  },
+  { label: "R7,200 / month",   amount: 7200,   url: "https://pay.yoco.com/r/4ZrZok", tier: "Elite",    growth: 25  },
+  { label: "R8,000 / month",   amount: 8000,   url: "https://pay.yoco.com/r/2bAEn5", tier: "Elite",    growth: 25  },
+
+  // ── 50% p/m ──────────────────────────────────────────────────────
+  { label: "R10,000 / month",  amount: 10000,  url: "https://pay.yoco.com/r/7rnzDY", tier: "Apex",     growth: 50  },
+  { label: "R20,000 / month",  amount: 20000,  url: "https://pay.yoco.com/r/4WpB0A", tier: "Apex",     growth: 50  },
+  { label: "R30,000 / month",  amount: 30000,  url: "https://pay.yoco.com/r/7vLYnO", tier: "Apex",     growth: 50  },
+  { label: "R40,000 / month",  amount: 40000,  url: "https://pay.yoco.com/r/mRgRG8", tier: "Apex",     growth: 50  },
+  { label: "R50,000 / month",  amount: 50000,  url: "https://pay.yoco.com/r/mMM1BB", tier: "Apex",     growth: 50  },
+  { label: "R60,000 / month",  amount: 60000,  url: "https://pay.yoco.com/r/m9Nwv9", tier: "Apex",     growth: 50  },
+  { label: "R70,000 / month",  amount: 70000,  url: "https://pay.yoco.com/r/mNd1vj", tier: "Apex",     growth: 50  },
+  { label: "R80,000 / month",  amount: 80000,  url: "https://pay.yoco.com/r/2QEpvL", tier: "Apex",     growth: 50  },
+  { label: "R90,000 / month",  amount: 90000,  url: "https://pay.yoco.com/r/2wXY9o", tier: "Apex",     growth: 50  },
+  { label: "R95,000 / month",  amount: 95000,  url: "https://pay.yoco.com/r/7lbL3O", tier: "Apex",     growth: 50  },
+
+  // ── 100% p/m ─────────────────────────────────────────────────────
+  { label: "R100,000 / month", amount: 100000, url: "https://pay.yoco.com/r/meQEVR", tier: "Platinum", growth: 100 },
+  { label: "R150,000 / month", amount: 150000, url: "https://pay.yoco.com/r/mRgRDQ", tier: "Platinum", growth: 100 },
+  { label: "R200,000 / month", amount: 200000, url: "https://pay.yoco.com/r/2BvYdn", tier: "Platinum", growth: 100 },
+  { label: "R250,000 / month", amount: 250000, url: "https://pay.yoco.com/r/4ZrZVe", tier: "Platinum", growth: 100 },
+  { label: "R300,000 / month", amount: 300000, url: "https://pay.yoco.com/r/7vLY03", tier: "Platinum", growth: 100 },
+  { label: "R350,000 / month", amount: 350000, url: "https://pay.yoco.com/r/mde89J", tier: "Platinum", growth: 100 },
+  { label: "R400,000 / month", amount: 400000, url: "https://pay.yoco.com/r/m6VBzn", tier: "Platinum", growth: 100 },
+  { label: "R450,000 / month", amount: 450000, url: "https://pay.yoco.com/r/4aKPpD", tier: "Platinum", growth: 100 },
+  { label: "R500,000 / month", amount: 500000, url: "https://pay.yoco.com/r/2V50pP", tier: "Platinum", growth: 100 },
+];
+
+const TIER_COLORS = {
+  Starter: { text: "#2ecc71", bg: "rgba(46,204,113,0.12)", border: "rgba(46,204,113,0.25)" },
+  Growth: { text: "#3498db", bg: "rgba(52,152,219,0.12)", border: "rgba(52,152,219,0.25)" },
+  Premium: { text: "#e67e22", bg: "rgba(230,126,34,0.12)", border: "rgba(230,126,34,0.25)" },
+  Elite: { text: "#9b59b6", bg: "rgba(155,89,182,0.12)", border: "rgba(155,89,182,0.25)" },
+  Apex: { text: "#e74c3c", bg: "rgba(231,76,60,0.12)", border: "rgba(231,76,60,0.25)" },
+  Platinum: { text: "#f39c12", bg: "rgba(243,156,18,0.12)", border: "rgba(243,156,18,0.25)" },
+};
+
+// ============================================================
+// HELPERS
+// ============================================================
+const fmt = (n) => `R${Number(n || 0).toLocaleString("en-ZA", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const getGrowthRate = (a) => a >= 100000 ? 100 : a >= 10000 ? 50 : a >= 4800 ? 25 : a >= 1200 ? 15 : a >= 600 ? 10 : 5;
+const calcDecemberBalance = (monthlyAmount) => {
+  const rate = getGrowthRate(monthlyAmount) / 100;
+  const startMonth = new Date().getMonth();
+  let balance = 0;
+  for (let i = 0; i <= 11 - startMonth; i++) balance = (balance + monthlyAmount) * (1 + rate);
+  return balance;
+};
+const PAYOUT_DATE = new Date("2026-12-15T00:00:00");
+const getCountdown = () => {
+  const diff = PAYOUT_DATE - new Date();
+  if (diff <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0, unlocked: true };
+  return {
+    days: Math.floor(diff / 86400000),
+    hours: Math.floor((diff % 86400000) / 3600000),
+    minutes: Math.floor((diff % 3600000) / 60000),
+    seconds: Math.floor((diff % 60000) / 1000),
+    unlocked: false,
+  };
+};
+
+const DEMO_USER = {
+  id: "demo-001", email: "demo@holidaysave.co.za",
+  user_metadata: { full_name: "Demo Investor", phone: "0821234567", goal: 25000, monthly_amount: 1200 },
+};
+const DEMO_PAYMENTS = [
+  { id: 1, amount: 1200, status: "success", created_at: "2026-01-15", month: "January" },
+  { id: 2, amount: 1200, status: "success", created_at: "2026-02-15", month: "February" },
+  { id: 3, amount: 1200, status: "pending", created_at: "2026-03-13", month: "March" },
+];
+const DEMO_LEADERBOARD = Array.from({ length: 20 }, (_, i) => ({
+  id: i + 1,
+  name: ["Sipho M.", "Ayesha K.", "Liam V.", "Zanele D.", "Marco P.", "Fatima A.", "Thabo N.", "Jessica L.", "Ryan B.", "Nomsa T.", "Carlos M.", "Priya S.", "Johan W.", "Aisha R.", "Ethan K.", "Lerato M.", "Daniel F.", "Kefilwe O.", "Sam N.", "Thandeka Z."][i],
+  balance: Math.round((20 - i) * 1200 * 1.15),
+  completion: Math.max(10, Math.round(95 - i * 3)),
+}));
+
+// ============================================================
+// CSS — Full Neumorphic Design System
+// ============================================================
+const CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #e8edf2;
+    --bg-dark: #dde3ea;
+    --surface: #e8edf2;
+    --teal: #00c9b1;
+    --teal-dark: #00a896;
+    --teal-light: #4dd9c8;
+    --teal-glow: rgba(0,201,177,0.25);
+    --text: #3a4a5c;
+    --text2: #6b7c93;
+    --text3: #9aaabb;
+    --white: #ffffff;
+    --font: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+
+    /* Neumorphic shadows — the core of this design */
+    --nm-out: 6px 6px 14px #c8cdd4, -6px -6px 14px #ffffff;
+    --nm-out-lg: 10px 10px 24px #c0c6ce, -10px -10px 24px #ffffff;
+    --nm-out-xl: 16px 16px 32px #b8bec7, -16px -16px 32px #ffffff;
+    --nm-in: inset 4px 4px 10px #c8cdd4, inset -4px -4px 10px #ffffff;
+    --nm-in-sm: inset 2px 2px 6px #c8cdd4, inset -2px -2px 6px #ffffff;
+    --nm-teal: 6px 6px 14px #c8cdd4, -6px -6px 14px #ffffff, 0 0 20px var(--teal-glow);
+
+    --radius: 20px;
+    --radius-sm: 14px;
+    --radius-xs: 10px;
+    --radius-pill: 999px;
+  }
+
+  html, body, #root { height: 100%; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  .app { min-height: 100vh; padding-bottom: 130px; }
+
+  /* ================================================================
+     NEUMORPHIC CARD
+  ================================================================ */
+  .nm-card {
+    background: var(--bg);
+    border-radius: var(--radius);
+    box-shadow: var(--nm-out);
+    padding: 24px;
+    transition: box-shadow 0.25s;
+  }
+  .nm-card-lg {
+    background: var(--bg);
+    border-radius: 28px;
+    box-shadow: var(--nm-out-xl);
+    padding: 28px;
+  }
+  .nm-inset {
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--nm-in);
+    padding: 16px 20px;
+  }
+
+  /* ================================================================
+     BUTTONS — Picture 2 style: raised pill / circle buttons
+  ================================================================ */
+  .nm-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: none; background: var(--bg);
+    font-family: var(--font); font-weight: 700;
+    cursor: pointer; transition: all 0.18s ease;
+    box-shadow: var(--nm-out);
+    color: var(--text2);
+  }
+  .nm-btn:hover { box-shadow: var(--nm-out-lg); transform: translateY(-1px); }
+  .nm-btn:active {
+    box-shadow: var(--nm-in-sm);
+    transform: translateY(1px);
+  }
+
+  .nm-btn-pill {
+    border-radius: var(--radius-pill);
+    padding: 12px 28px;
+    font-size: 15px;
+  }
+
+  .nm-btn-circle {
+    border-radius: 50%;
+    width: 44px; height: 44px;
+    font-size: 18px;
+    padding: 0;
+  }
+
+  .nm-btn-circle-lg {
+    border-radius: 50%;
+    width: 56px; height: 56px;
+    font-size: 22px;
+    padding: 0;
+  }
+
+  .nm-btn-primary {
+    background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+    color: white !important;
+    box-shadow: 6px 6px 14px #c8cdd4, -6px -6px 14px #ffffff, 0 4px 20px var(--teal-glow);
+  }
+  .nm-btn-primary:hover {
+    box-shadow: 8px 8px 20px #c0c6ce, -8px -8px 20px #ffffff, 0 6px 28px var(--teal-glow);
+    transform: translateY(-2px);
+  }
+  .nm-btn-primary:active {
+    box-shadow: inset 3px 3px 8px rgba(0,0,0,0.2), 0 2px 10px var(--teal-glow);
+    transform: translateY(0);
+  }
+
+  .nm-btn-wide {
+    width: 100%;
+    border-radius: var(--radius-pill);
+    padding: 16px 28px;
+    font-size: 16px;
+  }
+
+  .nm-btn-ghost {
+    background: var(--bg);
+    border-radius: var(--radius-pill);
+    padding: 10px 20px;
+    font-size: 13px;
+    color: var(--text2);
+    box-shadow: var(--nm-out);
+  }
+
+  .nm-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none !important;
+  }
+
+  /* ================================================================
+     STATUS BADGES — Picture 1 style exactly
+  ================================================================ */
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 18px 7px 12px;
+    border-radius: var(--radius-pill);
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.2px;
+    box-shadow: 3px 3px 8px rgba(0,0,0,0.08), -2px -2px 6px rgba(255,255,255,0.9);
+  }
+  .status-badge .badge-icon {
+    width: 20px; height: 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; flex-shrink: 0;
+  }
+
+  /* Pending — warm orange/yellow */
+  .status-pending {
+    background: #fef3e2;
+    color: #d4830a;
+    box-shadow: 3px 3px 8px rgba(212,131,10,0.15), -2px -2px 6px rgba(255,255,255,0.95);
+  }
+  .status-pending .badge-icon {
+    background: rgba(212,131,10,0.15);
+    color: #d4830a;
+  }
+
+  /* Submitted — soft blue */
+  .status-submitted {
+    background: #eaf0ff;
+    color: #3b6fd4;
+    box-shadow: 3px 3px 8px rgba(59,111,212,0.15), -2px -2px 6px rgba(255,255,255,0.95);
+  }
+  .status-submitted .badge-icon {
+    background: rgba(59,111,212,0.15);
+    color: #3b6fd4;
+  }
+
+  /* Success — soft green */
+  .status-success {
+    background: #e8f8f0;
+    color: #1d9954;
+    box-shadow: 3px 3px 8px rgba(29,153,84,0.15), -2px -2px 6px rgba(255,255,255,0.95);
+  }
+  .status-success .badge-icon {
+    background: rgba(29,153,84,0.18);
+    color: #1d9954;
+  }
+
+  /* Failed — soft red/pink */
+  .status-failed {
+    background: #fde8e8;
+    color: #c0392b;
+    box-shadow: 3px 3px 8px rgba(192,57,43,0.15), -2px -2px 6px rgba(255,255,255,0.95);
+  }
+  .status-failed .badge-icon {
+    background: rgba(192,57,43,0.15);
+    color: #c0392b;
+  }
+
+  /* Expired — neutral grey */
+  .status-expired {
+    background: #f0f0f0;
+    color: #666;
+    box-shadow: 3px 3px 8px rgba(0,0,0,0.08), -2px -2px 6px rgba(255,255,255,0.95);
+  }
+  .status-expired .badge-icon {
+    background: rgba(0,0,0,0.08);
+    color: #666;
+  }
+
+  /* ================================================================
+     FLOATING NAVIGATION — Picture 2 raised pill style
+  ================================================================ */
+  .fnav {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--bg);
+    border-radius: var(--radius-pill);
+    padding: 10px 16px;
+    display: flex; gap: 6px; align-items: center;
+    box-shadow: var(--nm-out-xl);
+    z-index: 1000;
+    white-space: nowrap;
+  }
+
+  .fnav-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    border: none; background: transparent;
+    cursor: pointer; font-family: var(--font);
+    font-size: 9px; font-weight: 700;
+    color: var(--text3);
+    padding: 6px 10px;
+    border-radius: var(--radius-pill);
+    transition: all 0.2s;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    min-width: 52px;
+  }
+  .fnav-btn:hover { color: var(--text2); }
+  .fnav-btn.active { color: var(--teal-dark); }
+
+  .fnav-icon {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+    background: var(--bg);
+    box-shadow: var(--nm-out);
+    transition: all 0.2s;
+  }
+  .fnav-btn:hover .fnav-icon {
+    box-shadow: var(--nm-out-lg);
+    transform: translateY(-1px);
+  }
+  .fnav-btn.active .fnav-icon {
+    background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+    box-shadow: 4px 4px 12px #c0c6ce, -4px -4px 12px #ffffff, 0 4px 16px var(--teal-glow);
+    color: white;
+  }
+  .fnav-btn:active .fnav-icon {
+    box-shadow: var(--nm-in-sm);
+  }
+
+  /* ================================================================
+     INPUTS
+  ================================================================ */
+  .nm-input {
+    width: 100%;
+    padding: 14px 18px;
+    border: none; outline: none;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--nm-in);
+    font-family: var(--font); font-size: 15px; font-weight: 600;
+    color: var(--text);
+    transition: box-shadow 0.2s;
+  }
+  .nm-input::placeholder { color: var(--text3); font-weight: 500; }
+  .nm-input:focus {
+    box-shadow: var(--nm-in), 0 0 0 2px var(--teal-light);
+  }
+
+  .input-group { margin-bottom: 18px; }
+  .input-label {
+    display: block; font-size: 12px; font-weight: 800;
+    color: var(--text2); margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.8px;
+  }
+
+  /* ================================================================
+     PAGE LAYOUT
+  ================================================================ */
+  .page { padding: 28px 24px 0; max-width: 1100px; margin: 0 auto; }
+  .page-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
+  }
+  .page-title {
+    font-size: 26px; font-weight: 900; color: var(--text);
+    letter-spacing: -0.3px;
+  }
+  .page-sub { color: var(--text2); font-size: 14px; margin-top: 2px; font-weight: 600; }
+
+  /* ================================================================
+     STAT CARDS
+  ================================================================ */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 24px; }
+
+  .stat-icon-wrap {
+    width: 52px; height: 52px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; margin-bottom: 16px;
+    box-shadow: var(--nm-out);
+  }
+  .stat-label {
+    font-size: 11px; font-weight: 800; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 6px;
+  }
+  .stat-value { font-size: 26px; font-weight: 900; color: var(--text); letter-spacing: -0.5px; }
+  .stat-change { font-size: 12px; font-weight: 700; margin-top: 4px; }
+
+  /* ================================================================
+     PROGRESS BAR
+  ================================================================ */
+  .nm-progress-track {
+    height: 12px; border-radius: var(--radius-pill);
+    box-shadow: var(--nm-in-sm);
+    background: var(--bg);
+    overflow: hidden;
+  }
+  .nm-progress-fill {
+    height: 100%; border-radius: var(--radius-pill);
+    background: linear-gradient(90deg, var(--teal-dark), var(--teal), var(--teal-light));
+    box-shadow: 0 2px 8px var(--teal-glow);
+    transition: width 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .progress-labels {
+    display: flex; justify-content: space-between;
+    font-size: 12px; font-weight: 700; color: var(--text2);
+    margin-top: 8px;
+  }
+
+  /* ================================================================
+     CHART
+  ================================================================ */
+  .chart-svg { width: 100%; overflow: visible; }
+  .chart-tooltip {
+    position: absolute; background: var(--white);
+    border-radius: var(--radius-xs); padding: 10px 14px;
+    font-size: 12px; font-weight: 700; color: var(--text);
+    box-shadow: var(--nm-out); pointer-events: none;
+    transform: translate(-50%, -110%); white-space: nowrap; z-index: 10;
+  }
+
+  /* ================================================================
+     COUNTDOWN
+  ================================================================ */
+  .countdown { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .countdown-unit {
+    text-align: center;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--nm-in);
+    padding: 14px 16px;
+    min-width: 68px;
+  }
+  .countdown-num {
+    font-size: 30px; font-weight: 900; letter-spacing: -1px;
+    color: var(--teal-dark); line-height: 1;
+  }
+  .countdown-label {
+    font-size: 9px; font-weight: 800; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.8px; margin-top: 3px;
+  }
+  .countdown-sep {
+    font-size: 24px; font-weight: 900; color: var(--text3); margin-top: -6px;
+  }
+
+  /* ================================================================
+     PROJECTED BALANCE
+  ================================================================ */
+  .projected-balance {
+    font-size: 48px; font-weight: 900; letter-spacing: -2px;
+    color: var(--teal-dark); line-height: 1.1;
+    animation: countUp 1s ease;
+    text-shadow: 0 2px 12px var(--teal-glow);
+  }
+
+  /* ================================================================
+     TIER BUTTONS
+  ================================================================ */
+  .tier-btn {
+    background: var(--bg);
+    border: none;
+    border-radius: var(--radius);
+    padding: 18px;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font);
+    transition: all 0.2s;
+    box-shadow: var(--nm-out);
+    position: relative; overflow: hidden;
+  }
+  .tier-btn:hover { box-shadow: var(--nm-out-lg); transform: translateY(-2px); }
+  .tier-btn:active { box-shadow: var(--nm-in-sm); transform: translateY(0); }
+  .tier-btn.selected { box-shadow: var(--nm-in); }
+  .tier-amount { font-size: 17px; font-weight: 900; color: var(--text); }
+  .tier-growth { font-size: 12px; font-weight: 700; margin-top: 3px; }
+  .tier-dec { font-size: 11px; font-weight: 600; color: var(--text3); margin-top: 6px; }
+  .tier-stripe { position: absolute; top: 0; left: 0; right: 0; height: 4px; border-radius: var(--radius) var(--radius) 0 0; }
+  .tier-header { font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .tier-section { margin-bottom: 28px; }
+
+  /* ================================================================
+     TABLES
+  ================================================================ */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    font-size: 10px; font-weight: 900; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.9px;
+    padding: 10px 16px; text-align: left;
+    border-bottom: 2px solid var(--bg-dark);
+  }
+  td { padding: 14px 16px; font-size: 14px; border-bottom: 1px solid var(--bg-dark); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(0,201,177,0.04); }
+
+  /* ================================================================
+     LEADERBOARD
+  ================================================================ */
+  .lb-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px; border-radius: var(--radius-sm);
+    transition: all 0.15s; cursor: default; margin-bottom: 4px;
+  }
+  .lb-row:hover { box-shadow: var(--nm-out); transform: translateX(2px); }
+  .lb-rank { font-size: 13px; font-weight: 900; color: var(--text3); min-width: 26px; }
+  .lb-avatar {
+    width: 40px; height: 40px; border-radius: 14px;
+    background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 900; color: white; flex-shrink: 0;
+    box-shadow: var(--nm-out);
+  }
+  .lb-name { font-size: 14px; font-weight: 700; flex: 1; color: var(--text); }
+  .lb-amount { font-size: 14px; font-weight: 900; color: var(--teal-dark); }
+  .lb-pct { font-size: 11px; font-weight: 700; color: #1d9954; margin-top: 1px; }
+
+  /* ================================================================
+     NOTIFICATION TOASTS — Picture 1 style pill badges
+  ================================================================ */
+  .toast-wrap {
+    position: fixed; top: 24px; right: 24px;
+    display: flex; flex-direction: column; gap: 10px;
+    z-index: 9999; pointer-events: none;
+  }
+  .toast {
+    pointer-events: all;
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px 14px 14px;
+    border-radius: var(--radius-pill);
+    font-family: var(--font); font-size: 14px; font-weight: 700;
+    min-width: 260px; max-width: 360px;
+    animation: slideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer;
+  }
+  .toast .toast-icon {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
+  }
+  .toast-msg { font-size: 12px; font-weight: 600; opacity: 0.8; margin-top: 1px; }
+  .toast-close { margin-left: auto; font-size: 16px; opacity: 0.5; flex-shrink: 0; }
+
+  /* Toast color variants matching Picture 1 */
+  .toast-info {
+    background: #eaf0ff;
+    color: #3b6fd4;
+    box-shadow: 4px 4px 14px rgba(59,111,212,0.2), -3px -3px 10px rgba(255,255,255,0.95);
+  }
+  .toast-info .toast-icon { background: rgba(59,111,212,0.15); color: #3b6fd4; }
+
+  .toast-success {
+    background: #e8f8f0;
+    color: #1d9954;
+    box-shadow: 4px 4px 14px rgba(29,153,84,0.2), -3px -3px 10px rgba(255,255,255,0.95);
+  }
+  .toast-success .toast-icon { background: rgba(29,153,84,0.18); color: #1d9954; }
+
+  .toast-warning {
+    background: #fef3e2;
+    color: #d4830a;
+    box-shadow: 4px 4px 14px rgba(212,131,10,0.2), -3px -3px 10px rgba(255,255,255,0.95);
+  }
+  .toast-warning .toast-icon { background: rgba(212,131,10,0.15); color: #d4830a; }
+
+  .toast-error {
+    background: #fde8e8;
+    color: #c0392b;
+    box-shadow: 4px 4px 14px rgba(192,57,43,0.2), -3px -3px 10px rgba(255,255,255,0.95);
+  }
+  .toast-error .toast-icon { background: rgba(192,57,43,0.15); color: #c0392b; }
+
+  /* ================================================================
+     TOGGLE SWITCH — neumorphic
+  ================================================================ */
+  .nm-switch {
+    width: 52px; height: 28px; border-radius: 14px;
+    background: var(--bg); cursor: pointer;
+    position: relative; transition: all 0.2s; flex-shrink: 0;
+    box-shadow: var(--nm-in-sm);
+  }
+  .nm-switch.on { background: linear-gradient(135deg, var(--teal-dark), var(--teal)); box-shadow: var(--nm-in-sm), 0 0 12px var(--teal-glow); }
+  .nm-switch-thumb {
+    width: 22px; height: 22px; border-radius: 50%; background: white;
+    position: absolute; top: 3px; left: 3px;
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 2px 2px 6px rgba(0,0,0,0.15);
+  }
+  .nm-switch.on .nm-switch-thumb { transform: translateX(24px); }
+
+  /* ================================================================
+     AUTH
+  ================================================================ */
+  .auth-wrap {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px; background: var(--bg); position: relative; overflow: hidden;
+  }
+  .auth-orb {
+    position: absolute; border-radius: 50%;
+    filter: blur(100px); opacity: 0.12; pointer-events: none;
+  }
+  .auth-card {
+    background: var(--bg); border-radius: 32px;
+    padding: 44px; width: 100%; max-width: 440px;
+    box-shadow: var(--nm-out-xl);
+    position: relative; z-index: 1;
+    animation: slideUp 0.4s ease;
+  }
+  .auth-logo {
+    width: 60px; height: 60px; border-radius: 20px;
+    background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; margin-bottom: 24px;
+    box-shadow: var(--nm-teal);
+  }
+  .auth-title { font-size: 28px; font-weight: 900; margin-bottom: 4px; color: var(--text); }
+  .auth-sub { color: var(--text2); font-size: 14px; font-weight: 600; margin-bottom: 32px; }
+  .auth-switch-txt { text-align: center; margin-top: 22px; font-size: 14px; color: var(--text2); font-weight: 600; }
+  .auth-switch-txt span { color: var(--teal-dark); cursor: pointer; font-weight: 800; }
+
+  .error-box {
+    background: #fde8e8; color: #c0392b;
+    border-radius: var(--radius-sm); padding: 12px 16px;
+    font-size: 13px; font-weight: 700; margin-bottom: 18px;
+    box-shadow: 3px 3px 8px rgba(192,57,43,0.15), -2px -2px 6px rgba(255,255,255,0.9);
+  }
+
+  /* ================================================================
+     SECURITY BANNER
+  ================================================================ */
+  .security-banner {
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--nm-in-sm);
+    padding: 16px 20px;
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  /* ================================================================
+     VERIFY PANEL
+  ================================================================ */
+  .verify-panel {
+    background: var(--bg);
+    border-radius: var(--radius);
+    box-shadow: var(--nm-in);
+    padding: 22px;
+    margin-top: 18px;
+  }
+
+  /* ================================================================
+     SETTING ROW
+  ================================================================ */
+  .setting-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 0; border-bottom: 1px solid rgba(0,0,0,0.05);
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { font-size: 15px; font-weight: 700; color: var(--text); }
+  .setting-sub { font-size: 12px; font-weight: 600; color: var(--text3); margin-top: 2px; }
+
+  /* ================================================================
+     GRID HELPERS
+  ================================================================ */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .flex-1 { flex: 1; }
+  .mt-4 { margin-top: 16px; }
+  .mt-6 { margin-top: 24px; }
+  .mb-4 { margin-bottom: 16px; }
+  .mb-6 { margin-bottom: 24px; }
+  .text-sm { font-size: 13px; font-weight: 600; }
+  .text-xs { font-size: 11px; font-weight: 600; }
+  .text-teal { color: var(--teal-dark); }
+  .text-muted { color: var(--text2); }
+
+  .teal-chip {
+    background: linear-gradient(135deg, var(--teal), var(--teal-dark));
+    color: white; border-radius: var(--radius-pill);
+    padding: 7px 16px; font-size: 12px; font-weight: 800;
+    box-shadow: 0 3px 12px var(--teal-glow);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+
+  .footer {
+    text-align: center; padding: 36px; color: var(--text3);
+    font-size: 13px; font-weight: 700; letter-spacing: 0.3px;
+  }
+
+  /* ================================================================
+     ANIMATIONS
+  ================================================================ */
+  @keyframes slideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(24px) scale(0.95); } to { opacity: 1; transform: translateX(0) scale(1); } }
+  @keyframes countUp { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  .spinner { animation: spin 0.75s linear infinite; display: inline-block; }
+
+  /* ================================================================
+     RESPONSIVE
+  ================================================================ */
+  @media (max-width: 640px) {
+    .page { padding: 20px 16px 0; }
+    .card-grid { grid-template-columns: 1fr 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .stat-value { font-size: 20px; }
+    .projected-balance { font-size: 34px; }
+    .countdown-num { font-size: 22px; }
+    .countdown-unit { min-width: 56px; padding: 10px 12px; }
+    .fnav { padding: 8px 10px; gap: 2px; }
+    .fnav-btn { min-width: 44px; padding: 4px 6px; font-size: 8px; }
+    .fnav-icon { width: 32px; height: 32px; font-size: 14px; }
+    .auth-card { padding: 28px 22px; }
+    .page-title { font-size: 22px; }
+    .nm-btn-circle-lg { width: 44px; height: 44px; font-size: 18px; }
+  }
+`;
+
+// ============================================================
+// STATUS BADGE COMPONENT (Picture 1)
+// ============================================================
+function StatusBadge({ status }) {
+  const configs = {
+    success:   { cls: "status-success",   icon: "✓",  label: "Success" },
+    pending:   { cls: "status-pending",   icon: "!",  label: "Pending" },
+    submitted: { cls: "status-submitted", icon: "↗",  label: "Submitted" },
+    failed:    { cls: "status-failed",    icon: "✕",  label: "Failed" },
+    expired:   { cls: "status-expired",   icon: "⏱", label: "Expired" },
+  };
+  const cfg = configs[status] || configs.pending;
+  return (
+    <span className={`status-badge ${cfg.cls}`}>
+      <span className="badge-icon">{cfg.icon}</span>
+      {cfg.label}
+    </span>
+  );
+}
+
+// ============================================================
+// TOAST SYSTEM (Picture 1 style)
+// ============================================================
+function ToastContainer({ toasts, onClose }) {
+  const icons = { success: "✓", error: "✕", warning: "!", info: "↗" };
+  return (
+    <div className="toast-wrap">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast toast-${t.type}`} onClick={() => onClose(t.id)}>
+          <div className="toast-icon">{icons[t.type] || "i"}</div>
+          <div className="flex-1">
+            <div>{t.title}</div>
+            {t.message && <div className="toast-msg">{t.message}</div>}
+          </div>
+          <div className="toast-close">×</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function useToast() {
+  const [toasts, setToasts] = useState([]);
+  const addToast = useCallback((t) => {
+    const id = Date.now();
+    setToasts(p => [...p, { ...t, id }]);
+    setTimeout(() => setToasts(p => p.filter(x => x.id !== id)), 4500);
+  }, []);
+  const removeToast = useCallback((id) => setToasts(p => p.filter(x => x.id !== id)), []);
+  return { toasts, addToast, removeToast };
+}
+
+// ============================================================
+// FLOATING NAV (Picture 2 style)
+// ============================================================
+function FloatingNav({ active, onNav, isAdmin }) {
+  const items = [
+    { id: "dashboard", icon: "📊", label: "Dashboard" },
+    { id: "invest", icon: "💸", label: "Invest" },
+    { id: "analytics", icon: "📈", label: "Analytics" },
+    { id: "leaderboard", icon: "🏆", label: "Board" },
+    { id: "withdraw", icon: "💰", label: "Withdraw" },
+    { id: "settings", icon: "⚙️", label: "Settings" },
+    ...(isAdmin ? [{ id: "admin", icon: "🛡️", label: "Admin" }] : []),
+  ];
+  return (
+    <nav className="fnav">
+      {items.map(item => (
+        <button key={item.id} className={`fnav-btn${active === item.id ? " active" : ""}`} onClick={() => onNav(item.id)}>
+          <span className="fnav-icon">{item.icon}</span>
+          {item.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ============================================================
+// AUTH PAGE
+// ============================================================
+function AuthPage({ onAuth }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ fullName: "", email: "", phone: "", password: "", goal: "" });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [tempUser, setTempUser] = useState(null);
+  const upd = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const handleLogin = async () => {
+    if (!form.email || !form.password) { setError("Email and password required"); return; }
+    setLoading(true); setError("");
+    const { data, error: err } = await sb.auth.signIn({ email: form.email, password: form.password });
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    onAuth(data.user || DEMO_USER);
+  };
+
+  const handleSignup = async () => {
+    if (!form.fullName || !form.email || !form.phone || !form.password) { setError("All fields required"); return; }
+    setLoading(true); setError("");
+    const { data, error: err } = await sb.auth.signUp({ email: form.email, password: form.password, options: { data: { full_name: form.fullName, phone: form.phone } } });
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setTempUser(data.user || { ...DEMO_USER, email: form.email, user_metadata: { full_name: form.fullName, phone: form.phone } });
+    setMode("goal");
+  };
+
+  const handleGoal = () => {
+    const g = Number(form.goal);
+    if (!g || g < 1000) { setError("Enter a goal of at least R1,000"); return; }
+    onAuth({ ...(tempUser || DEMO_USER), user_metadata: { ...tempUser?.user_metadata, goal: g } });
+  };
+
+  return (
+    <div className="auth-wrap">
+      <div className="auth-orb" style={{ width: 500, height: 500, background: "var(--teal)", top: -150, left: -150 }} />
+      <div className="auth-orb" style={{ width: 350, height: 350, background: "#3498db", bottom: -100, right: -80 }} />
+
+      {mode === "goal" ? (
+        <div className="auth-card">
+          <div className="auth-logo">🎯</div>
+          <div className="auth-title">Set Your Goal</div>
+          <div className="auth-sub">How much do you want by December 15, 2026?</div>
+          {error && <div className="error-box">{error}</div>}
+          <div className="input-group">
+            <label className="input-label">Target Amount (ZAR)</label>
+            <input className="nm-input" type="number" placeholder="e.g. 25000" value={form.goal} onChange={upd("goal")} />
+          </div>
+          <button className="nm-btn nm-btn-primary nm-btn-wide" onClick={handleGoal}>🎉 Start Saving!</button>
+        </div>
+      ) : (
+        <div className="auth-card">
+          <div className="auth-logo">🎄</div>
+          <div className="auth-title">{mode === "login" ? "Welcome back" : "Start saving"}</div>
+          <div className="auth-sub">{mode === "login" ? "Sign in to your holiday savings" : "Create your investment account"}</div>
+          {error && <div className="error-box">{error}</div>}
+
+          {mode === "signup" && <>
+            <div className="input-group">
+              <label className="input-label">Full Name</label>
+              <input className="nm-input" type="text" placeholder="Your full name" value={form.fullName} onChange={upd("fullName")} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Phone Number</label>
+              <input className="nm-input" type="tel" placeholder="+27 82 000 0000" value={form.phone} onChange={upd("phone")} />
+            </div>
+          </>}
+
+          <div className="input-group">
+            <label className="input-label">Email Address</label>
+            <input className="nm-input" type="email" placeholder="you@example.com" value={form.email} onChange={upd("email")} />
+          </div>
+          <div className="input-group" style={{ marginBottom: 26 }}>
+            <label className="input-label">Password</label>
+            <input className="nm-input" type="password" placeholder="••••••••" value={form.password} onChange={upd("password")} />
+          </div>
+
+          <button className="nm-btn nm-btn-primary nm-btn-wide" onClick={mode === "login" ? handleLogin : handleSignup} disabled={loading}>
+            {loading ? <span className="spinner">⏳</span> : mode === "login" ? "Sign In" : "Create Account"}
+          </button>
+
+          <div style={{ marginTop: 12 }}>
+            <button className="nm-btn nm-btn-ghost nm-btn-wide" onClick={() => onAuth(DEMO_USER)}>
+              🎪 Try Demo Mode
+            </button>
+          </div>
+
+          <div className="auth-switch-txt">
+            {mode === "login" ? <>No account? <span onClick={() => { setMode("signup"); setError(""); }}>Sign up</span></> : <>Have an account? <span onClick={() => { setMode("login"); setError(""); }}>Sign in</span></>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// CHART
+// ============================================================
+function AnalyticsChart({ monthlyAmount }) {
+  const [tooltip, setTooltip] = useState(null);
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const rate = getGrowthRate(monthlyAmount) / 100;
+  const data = months.map((m, i) => {
+    let balance = 0;
+    for (let j = 0; j <= i; j++) balance = (balance + monthlyAmount) * (1 + rate);
+    return { month: m, deposit: monthlyAmount, balance: Math.round(balance) };
+  });
+  const maxB = Math.max(...data.map(d => d.balance));
+  const W = 700, H = 230, P = { t: 20, r: 16, b: 40, l: 64 };
+  const iW = W - P.l - P.r, iH = H - P.t - P.b;
+  const xPos = i => P.l + (i / 11) * iW;
+  const yPos = v => P.t + iH - (v / maxB) * iH;
+  const bW = iW / 12 * 0.45;
+  const xBar = i => P.l + (i / 12) * iW + (iW / 12) * 0.27;
+  const lp = data.map((d, i) => `${i === 0 ? "M" : "L"}${xPos(i)},${yPos(d.balance)}`).join(" ");
+
+  return (
+    <div style={{ position: "relative" }}>
+      {tooltip && (
+        <div className="chart-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
+          <div style={{ color: "var(--teal-dark)", marginBottom: 4 }}>{tooltip.month} 2026</div>
+          <div>Deposit: {fmt(tooltip.deposit)}</div>
+          <div>Balance: {fmt(tooltip.balance)}</div>
+        </div>
+      )}
+      <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+        {[0, .25, .5, .75, 1].map(t => {
+          const y = P.t + iH * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={P.l} y1={y} x2={W - P.r} y2={y} stroke="rgba(0,0,0,0.05)" strokeWidth="1" strokeDasharray="4 4" />
+              <text x={P.l - 8} y={y + 4} fill="var(--text3)" fontSize="10" textAnchor="end" fontFamily="Nunito" fontWeight="700">{fmt(maxB * t)}</text>
+            </g>
+          );
+        })}
+
+        {/* Bar area top shadow */}
+        <defs>
+          <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#3498db" stopOpacity=".55" />
+            <stop offset="100%" stopColor="#3498db" stopOpacity=".15" />
+          </linearGradient>
+          <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--teal)" stopOpacity=".2" />
+            <stop offset="100%" stopColor="var(--teal)" stopOpacity="0" />
+          </linearGradient>
+          <filter id="barShadow">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#3498db" floodOpacity="0.2" />
+          </filter>
+        </defs>
+
+        {data.map((d, i) => (
+          <rect key={i} x={xBar(i)} y={yPos(d.deposit)} width={bW} height={iH - (yPos(d.deposit) - P.t)}
+            fill="url(#barGrad)" rx={5} filter="url(#barShadow)"
+            onMouseMove={e => { const r = e.currentTarget.closest("svg").getBoundingClientRect(); setTooltip({ x: e.clientX - r.left, y: e.clientY - r.top, ...d }); }}
+            onMouseLeave={() => setTooltip(null)} style={{ cursor: "pointer" }}
+          />
+        ))}
+
+        <path d={`${lp} L${xPos(11)},${P.t + iH} L${xPos(0)},${P.t + iH} Z`} fill="url(#lineGrad)" />
+        <path d={lp} fill="none" stroke="var(--teal)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        {data.map((d, i) => (
+          <circle key={i} cx={xPos(i)} cy={yPos(d.balance)} r={5} fill="var(--teal-dark)" stroke="var(--bg)" strokeWidth="2.5"
+            onMouseMove={e => { const r = e.currentTarget.closest("svg").getBoundingClientRect(); setTooltip({ x: e.clientX - r.left, y: e.clientY - r.top, ...d }); }}
+            onMouseLeave={() => setTooltip(null)} style={{ cursor: "pointer" }}
+          />
+        ))}
+
+        {months.map((m, i) => (
+          <text key={m} x={xBar(i) + bW / 2} y={H - 8} fill="var(--text3)" fontSize="10" textAnchor="middle" fontFamily="Nunito" fontWeight="700">{m}</text>
+        ))}
+      </svg>
+
+      <div className="row" style={{ gap: 20, marginTop: 10, justifyContent: "center" }}>
+        <div className="row" style={{ gap: 7 }}>
+          <div style={{ width: 12, height: 12, borderRadius: 3, background: "#3498db", opacity: .7, boxShadow: "0 2px 6px rgba(52,152,219,.4)" }} />
+          <span className="text-xs text-muted">Monthly Deposit</span>
+        </div>
+        <div className="row" style={{ gap: 7 }}>
+          <div style={{ width: 16, height: 3, borderRadius: 3, background: "var(--teal)", boxShadow: "0 1px 4px var(--teal-glow)" }} />
+          <span className="text-xs text-muted">Balance Growth</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function DashboardPage({ user, payments, onNav }) {
+  const meta = user?.user_metadata || {};
+  const goal = meta.goal || 25000;
+  const monthlyAmount = meta.monthly_amount || 1200;
+  const totalInvested = payments.filter(p => p.status === "success").reduce((s, p) => s + p.amount, 0);
+  const growthRate = getGrowthRate(monthlyAmount);
+  const currentBalance = totalInvested * (1 + growthRate / 100);
+  const projectedDec = calcDecemberBalance(monthlyAmount);
+  const progress = Math.min(100, Math.round((currentBalance / goal) * 100));
+  const [cd, setCd] = useState(getCountdown());
+  useEffect(() => { const t = setInterval(() => setCd(getCountdown()), 1000); return () => clearInterval(t); }, []);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Good day, {(meta.full_name || "Investor").split(" ")[0]} 👋</div>
+          <div className="page-sub">Your holiday savings are compounding</div>
+        </div>
+        <div className="teal-chip">🎄 Dec 15, 2026</div>
+      </div>
+
+      {/* Stats */}
+      <div className="card-grid">
+        {[
+          { icon: "💸", label: "Total Invested", value: fmt(totalInvested), change: `${payments.filter(p => p.status === "success").length} payments`, color: "#3498db", bg: "rgba(52,152,219,0.1)" },
+          { icon: "📊", label: "Current Balance", value: fmt(currentBalance), change: `↑ ${growthRate}% growth`, color: "var(--teal-dark)", bg: "rgba(0,168,150,0.1)" },
+          { icon: "📈", label: "Growth Rate", value: `${growthRate}%`, change: "per month", color: "#e67e22", bg: "rgba(230,126,34,0.1)" },
+          { icon: "🎯", label: "December Goal", value: fmt(goal), change: `${progress}% achieved`, color: "#9b59b6", bg: "rgba(155,89,182,0.1)" },
+        ].map((s, i) => (
+          <div key={i} className="nm-card">
+            <div className="stat-icon-wrap" style={{ background: s.bg }}>
+              {s.icon}
+            </div>
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-value">{s.value}</div>
+            <div className="stat-change" style={{ color: s.color }}>{s.change}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress + Projected */}
+      <div className="grid-2">
+        <div className="nm-card">
+          <div className="row mb-4">
+            <div className="flex-1">
+              <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text)" }}>Goal Progress</div>
+              <div className="text-sm text-muted mt-4" style={{ marginTop: 2 }}>Towards {fmt(goal)}</div>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 900, color: "var(--teal-dark)" }}>{progress}%</div>
+          </div>
+          <div className="nm-progress-track">
+            <div className="nm-progress-fill" style={{ width: `${progress}%` }} />
+          </div>
+          <div className="progress-labels">
+            <span>{fmt(currentBalance)}</span>
+            <span>{fmt(goal)}</span>
+          </div>
+          <div className="nm-inset mt-4" style={{ marginTop: 16 }}>
+            <div className="text-xs text-muted" style={{ marginBottom: 4, textTransform: "uppercase", letterSpacing: ".8px" }}>Monthly needed</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--teal-dark)" }}>{fmt(Math.max(0, (goal - currentBalance) / 9))}</div>
+          </div>
+        </div>
+
+        <div className="nm-card" style={{ textAlign: "center" }}>
+          <div className="text-xs text-muted" style={{ textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 10 }}>Projected December Balance</div>
+          <div className="projected-balance">{fmt(projectedDec)}</div>
+          <div className="text-sm text-muted" style={{ marginTop: 8 }}>by December 15, 2026</div>
+          <div className="nm-inset" style={{ marginTop: 16 }}>
+            <div className="text-xs" style={{ color: "var(--teal-dark)", fontWeight: 800 }}>🔒 Locked until Dec 15, 2026</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Countdown */}
+      <div className="nm-card mb-6" style={{ marginBottom: 24 }}>
+        <div className="row">
+          <div className="flex-1">
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Payout Countdown</div>
+            <div className="text-sm text-muted" style={{ marginTop: 2 }}>Withdrawal unlocks December 15, 2026</div>
+          </div>
+          {cd.unlocked
+            ? <button className="nm-btn nm-btn-primary nm-btn-pill" onClick={() => onNav("withdraw")}>💰 Withdraw!</button>
+            : <button className="nm-btn nm-btn-pill" style={{ opacity: .5, cursor: "not-allowed" }} disabled>🔒 Locked</button>
+          }
+        </div>
+        <div className="countdown mt-4" style={{ marginTop: 18 }}>
+          {[["days", cd.days], ["hours", cd.hours], ["minutes", cd.minutes], ["seconds", cd.seconds]].map(([label, val], i) => (
+            <div key={label} className="row" style={{ gap: 4 }}>
+              <div className="countdown-unit">
+                <div className="countdown-num">{String(val).padStart(2, "0")}</div>
+                <div className="countdown-label">{label}</div>
+              </div>
+              {i < 3 && <div className="countdown-sep">:</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent payments */}
+      <div className="nm-card" style={{ marginBottom: 24 }}>
+        <div className="row mb-4">
+          <div style={{ fontWeight: 800, fontSize: 15 }} className="flex-1">Recent Payments</div>
+          <button className="nm-btn nm-btn-ghost" onClick={() => onNav("invest")}>+ Deposit</button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody>
+              {payments.slice(0, 5).map((p, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 700 }}>{p.month || "–"}</td>
+                  <td style={{ fontWeight: 900, color: "var(--teal-dark)" }}>{fmt(p.amount)}</td>
+                  <td><StatusBadge status={p.status} /></td>
+                  <td style={{ color: "var(--text2)" }}>{p.created_at?.split("T")[0] || "–"}</td>
+                </tr>
+              ))}
+              {payments.length === 0 && (
+                <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text3)", padding: 28 }}>
+                  No payments yet — <span style={{ color: "var(--teal-dark)", cursor: "pointer", fontWeight: 800 }} onClick={() => onNav("invest")}>make your first deposit</span>
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// INVEST PAGE
+// ============================================================
+function InvestPage({ user, payments, setPayments, addToast }) {
+  const [selectedTier, setSelectedTier] = useState(null);
+  const tiers = [...new Set(YOCO_LINKS.map(l => l.tier))];
+
+  const handlePay = link => {
+    setSelectedTier(link);
+    addToast({ type: "success", title: "Opening Yoco Payment", message: `Redirecting to ${link.label} payment page...` });
+    setTimeout(() => window.open(link.url, "_blank"), 400);
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Make a Deposit 💸</div><div className="page-sub">Choose your monthly investment tier</div></div>
+      </div>
+
+      {/* Security banner */}
+      <div className="security-banner">
+        <div className="nm-btn nm-btn-circle" style={{ fontSize: 20, flexShrink: 0 }}>🔒</div>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 14, color: "var(--text)" }}>Secured by Yoco + Supabase</div>
+          <div className="text-sm text-muted">Secret keys stored server-side only. Never in your browser.</div>
+        </div>
+      </div>
+
+      {/* Growth tier info */}
+      <div className="nm-inset mb-6" style={{ marginBottom: 22 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10, color: "var(--text)", fontSize: 13 }}>💡 Growth Tiers</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[["R150–450","5%","Starter"],["R600–900","10%","Growth"],["R1.2k–2.4k","15%","Premium"],["R4.8k–8k","25%","Elite"],["R10k+","50%","Apex"],["R100k+","100%","Platinum"]].map(([range, rate, tier]) => {
+            const tc = TIER_COLORS[tier];
+            return (
+              <div key={tier} style={{ padding: "5px 12px", borderRadius: "999px", background: tc.bg, border: `1px solid ${tc.border}`, display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontWeight: 900, fontSize: 12, color: tc.text }}>{rate}</span>
+                <span className="text-xs" style={{ color: "var(--text2)" }}>{range}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {tiers.map(tier => {
+        const tc = TIER_COLORS[tier];
+        const links = YOCO_LINKS.filter(l => l.tier === tier);
+        return (
+          <div key={tier} className="tier-section">
+            <div className="tier-header" style={{ color: tc.text }}>{tier} — {links[0]?.growth}% monthly growth</div>
+            <div className="tier-grid">
+              {links.map((link, i) => (
+                <button key={i} className={`tier-btn${selectedTier?.url === link.url ? " selected" : ""}`} onClick={() => handlePay(link)}>
+                  <div className="tier-stripe" style={{ background: `linear-gradient(90deg, ${tc.text}, ${tc.text}66)` }} />
+                  <div className="tier-amount">{link.label}</div>
+                  <div className="tier-growth" style={{ color: tc.text }}>↑ {link.growth}% / month</div>
+                  <div className="tier-dec">Dec ≈ {fmt(calcDecemberBalance(link.amount))}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+
+
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// ANALYTICS
+// ============================================================
+function AnalyticsPage({ user, payments }) {
+  const meta = user?.user_metadata || {};
+  const monthlyAmount = meta.monthly_amount || 1200;
+  const growthRate = getGrowthRate(monthlyAmount);
+  const totalInvested = payments.filter(p => p.status === "success").reduce((s, p) => s + p.amount, 0);
+  const currentBalance = totalInvested * (1 + growthRate / 100);
+
+  return (
+    <div className="page">
+      <div className="page-header"><div><div className="page-title">Analytics 📈</div><div className="page-sub">Investment performance overview</div></div></div>
+
+      <div className="nm-card mb-6" style={{ marginBottom: 24 }}>
+        <div className="row mb-4">
+          <div className="flex-1">
+            <div style={{ fontWeight: 800, fontSize: 15 }}>Balance Growth — 2026</div>
+            <div className="text-sm text-muted" style={{ marginTop: 2 }}>{fmt(monthlyAmount)}/month at {growthRate}% monthly growth</div>
+          </div>
+          <div style={{ background: "rgba(0,168,150,0.1)", borderRadius: "999px", padding: "7px 16px", boxShadow: "var(--nm-out)" }}>
+            <span style={{ fontSize: 13, fontWeight: 900, color: "var(--teal-dark)" }}>{growthRate}% / month</span>
+          </div>
+        </div>
+        <AnalyticsChart monthlyAmount={monthlyAmount} />
+      </div>
+
+      <div className="card-grid">
+        {[
+          { label: "Total Invested", value: fmt(totalInvested), icon: "💸", color: "#3498db" },
+          { label: "Current Balance", value: fmt(currentBalance), icon: "📊", color: "var(--teal-dark)" },
+          { label: "Successful", value: payments.filter(p => p.status === "success").length, icon: "✅", color: "#1d9954" },
+          { label: "Missed", value: payments.filter(p => p.status === "failed").length, icon: "⚠️", color: "#c0392b" },
+        ].map((s, i) => (
+          <div key={i} className="nm-card" style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 28, marginBottom: 10 }}>{s.icon}</div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: s.color }}>{s.value}</div>
+            <div className="text-xs text-muted" style={{ marginTop: 4, textTransform: "uppercase", letterSpacing: ".8px" }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="nm-card mt-6">
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 16 }}>Monthly Projections</div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Deposit</th><th>Growth</th><th>Balance</th></tr></thead>
+            <tbody>
+              {["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m, i) => {
+                const r = getGrowthRate(monthlyAmount) / 100;
+                let bal = 0;
+                for (let j = 0; j <= i; j++) bal = (bal + monthlyAmount) * (1 + r);
+                return (
+                  <tr key={m}>
+                    <td style={{ fontWeight: 700 }}>{m} 2026</td>
+                    <td style={{ fontWeight: 800 }}>{fmt(monthlyAmount)}</td>
+                    <td style={{ color: "#1d9954", fontWeight: 800 }}>+{fmt(bal - monthlyAmount * (i + 1))}</td>
+                    <td style={{ color: "var(--teal-dark)", fontWeight: 900 }}>{fmt(bal)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// LEADERBOARD
+// ============================================================
+function LeaderboardPage() {
+  return (
+    <div className="page">
+      <div className="page-header"><div><div className="page-title">Leaderboard 🏆</div><div className="page-sub">Top 50 holiday savers</div></div></div>
+
+      {/* Top 3 podium */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, marginBottom: 24 }}>
+        {DEMO_LEADERBOARD.slice(0, 3).map((u, i) => (
+          <div key={u.id} className="nm-card" style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>{["🥇","🥈","🥉"][i]}</div>
+            <div className="lb-avatar" style={{ margin: "0 auto 10px" }}>{u.name[0]}</div>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>{u.name}</div>
+            <div style={{ color: "var(--teal-dark)", fontWeight: 900, fontSize: 16, marginTop: 4 }}>{fmt(u.balance)}</div>
+            <div style={{ marginTop: 8 }}><StatusBadge status="success" /></div>
+          </div>
+        ))}
+      </div>
+
+      <div className="nm-card">
+        {DEMO_LEADERBOARD.slice(3).map((u, i) => (
+          <div key={u.id} className="lb-row">
+            <div className="lb-rank">#{i + 4}</div>
+            <div className="lb-avatar">{u.name[0]}</div>
+            <div className="lb-name">{u.name}</div>
+            <div style={{ textAlign: "right" }}>
+              <div className="lb-amount">{fmt(u.balance)}</div>
+              <div className="lb-pct">{u.completion}% of goal</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// WITHDRAW
+// ============================================================
+function WithdrawPage({ user, payments }) {
+  const [cd, setCd] = useState(getCountdown());
+  useEffect(() => { const t = setInterval(() => setCd(getCountdown()), 1000); return () => clearInterval(t); }, []);
+  const meta = user?.user_metadata || {};
+  const monthlyAmount = meta.monthly_amount || 1200;
+  const totalInvested = payments.filter(p => p.status === "success").reduce((s, p) => s + p.amount, 0);
+  const growthRate = getGrowthRate(monthlyAmount);
+  const currentBalance = totalInvested * (1 + growthRate / 100);
+  const projectedDec = calcDecemberBalance(monthlyAmount);
+
+  return (
+    <div className="page">
+      <div className="page-header"><div><div className="page-title">Withdraw 💰</div><div className="page-sub">Funds unlock December 15, 2026</div></div></div>
+
+      <div className="nm-card-lg" style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontSize: 52, marginBottom: 14 }}>{cd.unlocked ? "🎉" : "🔒"}</div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: "var(--text)", marginBottom: 6 }}>{cd.unlocked ? "Withdrawal Unlocked!" : "Funds Are Locked"}</div>
+        <div className="text-sm text-muted" style={{ marginBottom: 22 }}>You can only withdraw on December 15, 2026</div>
+
+        {!cd.unlocked && (
+          <div className="countdown" style={{ justifyContent: "center", marginBottom: 24 }}>
+            {[["days", cd.days], ["hours", cd.hours], ["minutes", cd.minutes], ["seconds", cd.seconds]].map(([label, val], i) => (
+              <div key={label} className="row" style={{ gap: 4 }}>
+                <div className="countdown-unit">
+                  <div className="countdown-num">{String(val).padStart(2, "0")}</div>
+                  <div className="countdown-label">{label}</div>
+                </div>
+                {i < 3 && <div className="countdown-sep">:</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 24 }}>
+          <div className="text-xs text-muted" style={{ textTransform: "uppercase", letterSpacing: ".8px", marginBottom: 6 }}>Estimated Payout</div>
+          <div className="projected-balance">{fmt(projectedDec)}</div>
+        </div>
+
+        <button
+          className="nm-btn nm-btn-primary nm-btn-pill"
+          style={{ minWidth: 240, opacity: cd.unlocked ? 1 : .4, cursor: cd.unlocked ? "pointer" : "not-allowed" }}
+          disabled={!cd.unlocked}
+        >
+          {cd.unlocked ? "💸 Withdraw Funds" : "🔒 Locked Until Dec 15, 2026"}
+        </button>
+      </div>
+
+      <div className="nm-card">
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 16 }}>Balance Summary</div>
+        {[
+          ["Total Deposited", fmt(totalInvested), "#3498db"],
+          ["Growth Earned", fmt(Math.max(0, currentBalance - totalInvested)), "#1d9954"],
+          ["Current Balance", fmt(currentBalance), "var(--teal-dark)"],
+          ["Projected Dec Balance", fmt(projectedDec), "var(--teal-dark)"],
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
+            <span style={{ fontWeight: 600, color: "var(--text2)" }}>{label}</span>
+            <span style={{ fontWeight: 900, color }}>{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// SETTINGS
+// ============================================================
+function SettingsPage({ user, onLogout }) {
+  const [dark, setDark] = useState(false);
+  const [notifs, setNotifs] = useState(true);
+  const meta = user?.user_metadata || {};
+
+  return (
+    <div className="page">
+      <div className="page-header"><div><div className="page-title">Settings ⚙️</div><div className="page-sub">Manage your account</div></div></div>
+
+      {/* Profile card */}
+      <div className="nm-card-lg" style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, marginBottom: 22 }}>
+          <div style={{ width: 68, height: 68, borderRadius: 22, background: "linear-gradient(135deg, var(--teal), var(--teal-dark))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 900, color: "white", boxShadow: "var(--nm-teal)", flexShrink: 0 }}>
+            {(meta.full_name || "D")[0]}
+          </div>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 900, color: "var(--text)" }}>{meta.full_name || "Demo Investor"}</div>
+            <div className="text-sm text-muted">{user?.email}</div>
+          </div>
+        </div>
+
+        {[["Full Name", meta.full_name || "Demo Investor"], ["Email", user?.email || "demo@holidaysave.co.za"], ["Phone", meta.phone || "Not set"], ["December Goal", fmt(meta.goal || 25000)], ["Monthly Amount", fmt(meta.monthly_amount || 1200)]].map(([label, value]) => (
+          <div key={label} className="setting-row">
+            <div className="setting-label">{label}</div>
+            <div style={{ fontWeight: 700, color: "var(--text2)" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Preferences */}
+      <div className="nm-card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 16, color: "var(--text)" }}>Preferences</div>
+        {[
+          { label: "Dark Mode", sub: "Toggle light / dark", val: dark, set: setDark },
+          { label: "Payment Notifications", sub: "Alerts for deposits & penalties", val: notifs, set: setNotifs },
+        ].map(({ label, sub, val, set }) => (
+          <div key={label} className="setting-row">
+            <div><div className="setting-label">{label}</div><div className="setting-sub">{sub}</div></div>
+            <div className={`nm-switch${val ? " on" : ""}`} onClick={() => set(v => !v)}><div className="nm-switch-thumb" /></div>
+          </div>
+        ))}
+      </div>
+
+      {/* Security */}
+      <div className="nm-card" style={{ marginBottom: 24 }}>
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 16 }}>Security & Payments</div>
+        {[
+          ["Authentication", "Supabase Auth", "success"],
+          ["Payments", "Yoco (PCI Compliant)", "success"],
+          ["Secret Keys", "Edge Function (server-only)", "success"],
+          ["Database", "Supabase (encrypted)", "success"],
+        ].map(([label, sub, status]) => (
+          <div key={label} className="setting-row">
+            <div><div className="setting-label">{label}</div><div className="setting-sub">{sub}</div></div>
+            <StatusBadge status={status} />
+          </div>
+        ))}
+      </div>
+
+      <button className="nm-btn nm-btn-wide" style={{ color: "#c0392b", background: "#fde8e8", boxShadow: "4px 4px 14px rgba(192,57,43,0.15), -3px -3px 10px rgba(255,255,255,0.9)" }} onClick={onLogout}>
+        🚪 Sign Out
+      </button>
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN
+// ============================================================
+function AdminPage() {
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Admin Panel 🛡️</div><div className="page-sub">Platform overview</div></div>
+        <StatusBadge status="submitted" />
+      </div>
+
+      <div className="card-grid" style={{ marginBottom: 24 }}>
+        {[
+          { label: "Total Users", value: "247", icon: "👥", color: "#3498db" },
+          { label: "Total Invested", value: fmt(1847320), icon: "💰", color: "var(--teal-dark)" },
+          { label: "Monthly Deposits", value: fmt(342800), icon: "📈", color: "#1d9954" },
+          { label: "Withdrawals", value: "0", icon: "📤", color: "#9b59b6" },
+          { label: "Penalties", value: "12", icon: "⚠️", color: "#c0392b" },
+        ].map((s, i) => (
+          <div key={i} className="nm-card" style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 28, marginBottom: 10 }}>{s.icon}</div>
+            <div style={{ fontSize: 26, fontWeight: 900, color: s.color }}>{s.value}</div>
+            <div className="text-xs text-muted" style={{ marginTop: 4, textTransform: "uppercase", letterSpacing: ".8px" }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="nm-card">
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 16 }}>Investor List</div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Name</th><th>Balance</th><th>Goal %</th><th>Status</th></tr></thead>
+            <tbody>
+              {DEMO_LEADERBOARD.slice(0, 12).map((u, i) => (
+                <tr key={u.id}>
+                  <td style={{ color: "var(--text3)", fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ fontWeight: 700 }}>{u.name}</td>
+                  <td style={{ color: "var(--teal-dark)", fontWeight: 900 }}>{fmt(u.balance)}</td>
+                  <td style={{ color: "#1d9954", fontWeight: 800 }}>{u.completion}%</td>
+                  <td><StatusBadge status="success" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="footer">Payments powered by <strong>Yoco</strong></div>
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState("dashboard");
+  const [payments, setPayments] = useState(DEMO_PAYMENTS);
+  const { toasts, addToast, removeToast } = useToast();
+
+  useEffect(() => {
+    const cached = sb.auth.getUser();
+    if (cached) setUser(cached);
+    setLoading(false);
+  }, []);
+
+  const handleLogout = () => { sb.auth.signOut(); setUser(null); setPage("dashboard"); };
+
+  if (loading) return (
+    <>
+      <style>{CSS}</style>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", fontFamily: "Nunito, sans-serif" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 52, marginBottom: 16 }}>🎄</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text)" }}>Loading Holiday Savings...</div>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      <style>{CSS}</style>
+      {!user ? (
+        <AuthPage onAuth={setUser} />
+      ) : (
+        <div className="app">
+          {page === "dashboard"   && <DashboardPage user={user} payments={payments} onNav={setPage} />}
+          {page === "invest"      && <InvestPage user={user} payments={payments} setPayments={setPayments} addToast={addToast} />}
+          {page === "analytics"   && <AnalyticsPage user={user} payments={payments} />}
+          {page === "leaderboard" && <LeaderboardPage />}
+          {page === "withdraw"    && <WithdrawPage user={user} payments={payments} />}
+          {page === "settings"    && <SettingsPage user={user} onLogout={handleLogout} />}
+          {page === "admin"       && <AdminPage />}
+          <FloatingNav active={page} onNav={setPage} isAdmin={user?.email?.includes("admin")} />
+        </div>
+      )}
+      <ToastContainer toasts={toasts} onClose={removeToast} />
+    </>
+  );
+}
